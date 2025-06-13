@@ -1,0 +1,40 @@
+import pandas as pd
+import glob
+import re
+
+# 文件路径（根据你的实际路径修改）
+all_files = glob.glob("6.12/*.xlsx")  # or "*.csv"
+
+df_list = []
+
+for file in all_files:
+    df = pd.read_excel(file)
+
+    # 提取店铺名
+    filename = file.split('/')[-1]
+    shop_name = re.sub(r'\d+\.\d+.*', '', filename)
+    df['店铺名'] = shop_name
+
+    # 拆分 SKU货号，得到 型号 和 数量
+    df[['型号','数量']] = df['SKU货号'].str.split('*', expand=True)
+    df['数量'] = df['数量'].astype(int)
+    df['应履约件数'] = df['应履约件数'].astype(int)
+
+    # 计算合计
+    df['合计'] = df['数量'] * df['应履约件数']
+
+    # 订单创建时间转为日期
+    df['订单创建时间'] = pd.to_datetime(df['订单创建时间'])
+    df['日期'] = df['订单创建时间'].dt.date
+
+    df_list.append(df)
+
+# 合并所有数据
+df_all = pd.concat(df_list, ignore_index=True)
+
+# 汇总
+summary = df_all.groupby(['日期', '店铺名', '型号'])['合计'].sum().reset_index()
+
+summary
+
+summary.to_excel("6.12_output.xlsx", index=False)
