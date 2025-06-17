@@ -2,8 +2,8 @@ import pandas as pd
 import glob
 import re
 
-# 文件路径（根据你的实际路径修改）
-all_files = glob.glob("6.12/*.xlsx")  # or "*.csv"
+# 当前目录下的所有 .xlsx 文件
+all_files = glob.glob("*.xlsx")
 
 df_list = []
 
