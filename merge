@@ -1,0 +1,28 @@
+import os
+import glob
+import pandas as pd
+
+# 指定要合并的文件夹（也可以用 os.getcwd()）
+folder = '/path/to/your/folder'
+
+# 找到所有 Excel 文件
+excel_files = glob.glob(os.path.join(folder, '*.xlsx')) + glob.glob(os.path.join(folder, '*.xls'))
+
+# 用于存放合并结果的 DataFrame
+merged_df = pd.DataFrame()
+
+for file_path in excel_files:
+    # 读取文件中的所有 sheet 名
+    xls = pd.ExcelFile(file_path)
+    for sheet_name in xls.sheet_names:
+        # 解析当前 sheet
+        df = xls.parse(sheet_name)
+        # 添加“来源文件”和“来源表”列
+        df['来源文件'] = os.path.basename(file_path)
+        df['来源表'] = sheet_name
+        # 合并
+        merged_df = pd.concat([merged_df, df], ignore_index=True)
+
+# 将合并结果保存并打印
+merged_df.to_excel('merged_all_sheets.xlsx', index=False)
+print(merged_df)
