@@ -1,0 +1,70 @@
+import pandas as pd
+import os
+import re
+from datetime import datetime
+
+# ===== 设置你的文件夹路径 =====
+folder_path = os.getcwd()  # ← 替换为你自己的文件夹路径
+output_file = '所有店铺_周统计结果.xlsx'
+
+# ===== 周别分配函数 =====
+def assign_week(date):
+    if pd.to_datetime("2025-06-01") <= date < pd.to_datetime("2025-06-09"):
+        return "2025-06-01_to_2025-06-08"
+    elif pd.to_datetime("2025-06-09") <= date < pd.to_datetime("2025-06-16"):
+        return "2025-06-09_to_2025-06-15"
+    elif pd.to_datetime("2025-06-16") <= date < pd.to_datetime("2025-06-23"):
+        return "2025-06-16_to_2025-06-22"
+    elif pd.to_datetime("2025-06-23") <= date <= pd.to_datetime("2025-06-30 23:59:59"):
+        return "2025-06-23_to_2025-06-30"
+    else:
+        return None
+
+# ===== 处理单个文件 =====
+def process_shop_file(file_path, shop_name):
+    df = pd.read_excel(file_path)
+    df = df[df['订单状态'] == '已签收'].copy()
+
+    split_cols = df['SKU货号'].str.split('*', expand=True)
+    df['型号'] = split_cols[0]
+    df['单品数量'] = pd.to_numeric(split_cols[1], errors='coerce')
+    df['应履约件数'] = pd.to_numeric(df['应履约件数'], errors='coerce')
+    df['合计数量'] = df['应履约件数'] * df['单品数量']
+
+    df['订单创建时间'] = pd.to_datetime(df['订单创建时间'], errors='coerce')
+    df['周别'] = df['订单创建时间'].apply(assign_week)
+    df['店铺名'] = shop_name
+
+    df = df[df['合计数量'].notnull() & df['周别'].notnull()]
+
+    summary = df.groupby(['店铺名', '周别', '型号'])['合计数量'].sum().reset_index()
+    return summary
+
+# ===== 遍历所有文件 =====
+def process_all_files(folder_path):
+    all_data = []
+
+    for filename in os.listdir(folder_path):
+        if filename.endswith('.xlsx'):
+            filepath = os.path.join(folder_path, filename)
+            basename = os.path.splitext(filename)[0]
+            shop_name = re.sub(r'6月订单', '', basename).strip()
+
+            try:
+                summary = process_shop_file(filepath, shop_name)
+                if not summary.empty:
+                    all_data.append(summary)
+            except Exception as e:
+                print(f"❌ 处理失败：{filename}，原因：{e}")
+
+    return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
+
+# ===== 主程序执行 =====
+if __name__ == '__main__':
+    result_df = process_all_files(folder_path)
+
+    if not result_df.empty:
+        result_df.to_excel(output_file, index=False)
+        print(f"\n✅ 所有店铺数据汇总完成，结果已保存为：{output_file}")
+    else:
+        print("\n⚠️ 没有有效数据被处理，请检查路径或文件内容")
