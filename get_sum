@@ -1,0 +1,32 @@
+import os
+import pandas as pd
+
+# 获取当前目录
+current_dir = os.getcwd()
+
+# 用于存放每个文件的回款金额总和
+total_sum = 0
+
+# 遍历所有xlsx文件
+for filename in os.listdir(current_dir):
+    if filename.endswith('.xlsx'):
+        file_path = os.path.join(current_dir, filename)
+        try:
+            # 读取Sheet1
+            df = pd.read_excel(file_path, sheet_name='Sheet1', engine='openpyxl')
+
+            # 尝试匹配“平台回款”列（支持中英文）
+            for col in df.columns:
+                if '平台回款' in str(col):
+                    df[col] = pd.to_numeric(df[col], errors='coerce')  # 转换为数值
+                    file_sum = df[col].sum(skipna=True)
+                    total_sum += file_sum
+                    print(f"{filename} 的平台回款合计为: {file_sum:.2f}")
+                    break
+            else:
+                print(f"{filename} 中未找到 '平台回款' 列")
+
+        except Exception as e:
+            print(f"{filename} 读取失败: {e}")
+
+print(f"\n✅ 所有文件的“平台回款”总和为: {total_sum:.2f}")
