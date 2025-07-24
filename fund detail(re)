@@ -6,7 +6,7 @@ from collections import defaultdict
 
 # 路径配置
 
-excel_path = "hl FundDetail6.9-6.15.xlsx"
+excel_path = ""
 
 # 读取所有 sheet
 all_sheets = pd.read_excel(excel_path, sheet_name=None)
@@ -66,7 +66,7 @@ main_df['订单编号'] = main_df.apply(
 
 
 # 输出
-main_df.to_excel("hl FundDetail6.9-6.15.xlsx_汇总结果.xlsx", index=False)
+main_df.to_excel("", index=False)
 print("✅ 汇总完成，已导出为 Excel 文件。")
 
 
@@ -75,98 +75,65 @@ print("✅ 汇总完成，已导出为 Excel 文件。")
 
 
 
-# 自动提取“美东/美西”出库明细三列并合并导出（适配换行列名，增强美西兼容性）
-
-
-folder_path = 'hl outbound'  # 修改为你的实际文件夹路径
-all_files = glob.glob(os.path.join(folder_path, '*.xlsx'))
-
-merged_list = []
-
-for file in all_files:
-    filename = os.path.basename(file)
-    df = pd.read_excel(file, sheet_name=0)
-
-    # 清洗列名：去除换行和多余空格
-    df.columns = [str(col).replace('\n', '').replace('\r', '').strip() for col in df.columns]
-
-    # 默认设为空
-    order_col, sku_col, qty_col = None, None, None
-
-    if '美西' in filename:
-        order_col = next((col for col in df.columns if 'Platform order No' in col and '单号' in col), None)
-        sku_col = next((col for col in df.columns if 'SKU1' in col and 'SKU 1' in col), None)
-        qty_col = next((col for col in df.columns if 'SKU 1' in col and ('出库数量' in col or 'Outbound Qty' in col)), None)
-
-    elif '美东' in filename:
-        order_col = next((col for col in df.columns if 'Platform order No' in col and '单号' in col), None)
-        sku_col = next((col for col in df.columns if 'SKU1' in col and 'SKU 1' in col), None)
-        qty_col = next((col for col in df.columns if 'SKU 1' in col and ('出库数量' in col or 'Outbound Qty' in col)), None)
-
-    else:
-        print(f"⚠️ 未识别区域：{filename}，跳过")
-        continue
-
-    print(f"\n📄 正在处理文件：{filename}")
-    print(f"→ 匹配列名：订单={order_col}, SKU={sku_col}, 出库数量={qty_col}")
-
-    if order_col and sku_col and qty_col:
-        temp = df[[order_col, sku_col, qty_col]].copy()
-        temp.columns = ['订单号', 'SKU', '出库数量']
-        temp['来源文件'] = filename
-        merged_list.append(temp)
-    else:
-        print(f"❌ 缺少必要列，跳过文件：{filename}")
-        print("📋 当前列名为：", df.columns.tolist())
-
-# 合并 & 导出
-if merged_list:
-    result = pd.concat(merged_list, ignore_index=True)
-    result.to_excel('hl outbound 合并汇总.xlsx', index=False)
-    print("\n✅ 所有有效文件已合并导出为 hl outbound 合并汇总.xlsx")
-else:
-    print("\n⚠️ 没有有效数据被合并，请检查文件列名是否一致。")
-
-
-
-
-
-
-
-
-
-
-
 import pandas as pd
+import re
 
-# ====== 第二步：将出库信息匹配到资金汇总表中 ======
+# === 路径设置 ===
+回款路径 = ''
+资金表路径 = ''  # 替换为你的实际路径
+资金sheet名 = '结算-交易收入'
 
-# 读取资金汇总表
-fund_df = pd.read_excel('hl FundDetail6.9-6.15.xlsx_汇总结果.xlsx')
+# === 读取数据 ===
+回款_df = pd.read_excel(回款路径)
+资金_df = pd.read_excel(资金表路径, sheet_name=资金sheet名)
 
-# 读取出库信息表（之前导出的）
-outbound_df = pd.read_excel('hl outbound 合并汇总.xlsx')
+# === 提取 SKU 和 数量（履约件数 = pcs 前数字 × 最后一段数字）
+def extract_info(row):
+    try:
+        parts = str(row).split('_')
+        model = parts[1].split('*')[0]  # C31W
+        x = int(re.findall(r'\d+', parts[-2])[0])  # pcs 前的数量，如 4
+        y = int(parts[-1])  # 最后一段的数量，如 25
+        total_qty = x * y
+        return pd.Series([model, total_qty])
+    except:
+        return pd.Series([None, None])
 
-# 去除 outbound_df 中重复订单号，仅保留第一次出现的记录
-outbound_unique = outbound_df.drop_duplicates(subset='订单号')
+资金_df[['SKU', '数量']] = 资金_df['SKU明细(SkuID_SKU货号_SKU名称_SKU属性_销售数量)'].apply(extract_info)
 
-# 合并：左连接，以订单号为键
-merged_df = pd.merge(
-    fund_df,
-    outbound_unique[['订单号', 'SKU', '出库数量']],
-    how='left',
-    left_on='订单编号',
-    right_on='订单号'
+# === 字段标准化
+资金_df['订单编号'] = 资金_df['订单编号'].astype(str)
+回款_df['订单编号'] = 回款_df['订单编号'].astype(str)
+
+资金_df['交易收入'] = pd.to_numeric(资金_df['交易收入'], errors='coerce').round(2)
+回款_df['交易收入'] = pd.to_numeric(回款_df['交易收入'], errors='coerce').round(2)
+
+# === 去重资金表，避免合并放大
+资金_df_unique = (
+    资金_df
+    .drop_duplicates(subset=['订单编号', '交易收入'])
+    [['订单编号', '交易收入', 'SKU', '数量']]
 )
 
-# 删除右侧重复的订单号列
-merged_df.drop(columns=['订单号'], inplace=True)
+# === 合并
+merged_df = pd.merge(
+    回款_df,
+    资金_df_unique,
+    on=['订单编号', '交易收入'],
+    how='left'
+)
 
-# ✅ 重新安排列顺序：订单编号 → SKU → 出库数量 → 其他列
-prefix_cols = ['订单编号', 'SKU', '出库数量']
-other_cols = [col for col in merged_df.columns if col not in prefix_cols]
-merged_df = merged_df[prefix_cols + other_cols]
+# === 调整列顺序：将 SKU 和 数量 放在订单编号后面
+cols = list(merged_df.columns)
+if 'SKU' in cols and '数量' in cols and '订单编号' in cols:
+    idx = cols.index('订单编号')
+    # 移除后插入
+    cols.remove('SKU')
+    cols.remove('数量')
+    cols.insert(idx + 1, 'SKU')
+    cols.insert(idx + 2, '数量')
+    merged_df = merged_df[cols]
 
-# 导出最终文件
-merged_df.to_excel('hl FundDetail_汇总_含出库信息.xlsx', index=False)
-print("✅ 已匹配出库信息并导出 hl FundDetail_汇总_含出库信息.xlsx")
+# === 导出结果
+merged_df.to_excel('回款与SKU匹配结果.xlsx', index=False)
+print("✅ 匹配完成，已保存为：回款与SKU匹配结果.xlsx")
