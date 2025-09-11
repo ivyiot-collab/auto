@@ -1,40 +1,86 @@
 import pandas as pd
 import glob
 import re
+import os
 
-# 当前目录下的所有 .xlsx 文件
-all_files = glob.glob("*.xlsx")
+# === 路径与输出 ===
+input_path = r"."   # 当前目录（9.7 文件夹）
+output_file = "./统计结果_按日-店铺-SKU.xlsx"
 
-df_list = []
+all_files = glob.glob(os.path.join(input_path, "*.xlsx"))
+result_rows = []
+
+
+def get_shop_from_filename(path):
+    """从文件名中提取店铺名，去掉末尾的日期（如 9.7 / 09.07）"""
+    base = os.path.basename(path).rsplit('.', 1)[0]  # 去掉扩展名
+    shop = re.sub(r'(\d{1,2}[.\-]\d{1,2})$', '', base).strip()
+    return shop
+
+
+def parse_sku(sku_str, qty):
+    """
+    解析 SKU 串（支持组合）：例如 'C31W*2+C31B*2'
+    返回字典：{'C31W': 4, 'C31B': 4} （当应履约件数=2时）
+    """
+    if pd.isna(sku_str) or str(sku_str).strip() == "":
+        return {}
+    # 统一分隔符（兼容全角＋、逗号）
+    s = str(sku_str).replace('＋', '+').replace('，', '+').replace(',', '+')
+    sku_counts = {}
+    for part in s.split("+"):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.match(r"([A-Za-z0-9\-_]+)\*?(\d*)", part)
+        if not m:
+            continue
+        model = m.group(1)
+        each = int(m.group(2)) if m.group(2) else 1
+        sku_counts[model] = sku_counts.get(model, 0) + each * qty
+    return sku_counts
+
 
 for file in all_files:
     df = pd.read_excel(file)
+    # 列名统一为小写，去掉空格
+    df.columns = df.columns.str.strip().str.lower()
 
-    # 提取店铺名
-    filename = file.split('/')[-1]
-    shop_name = re.sub(r'\d+\.\d+.*', '', filename)
-    df['店铺名'] = shop_name
+    # 从文件名提取店铺名
+    shop = get_shop_from_filename(file)
 
-    # 拆分 SKU货号，得到 型号 和 数量
-    df[['型号','数量']] = df['SKU货号'].str.split('*', expand=True)
-    df['数量'] = df['数量'].astype(int)
-    df['应履约件数'] = df['应履约件数'].astype(int)
+    # 必要字段
+    col_qty = "应履约件数"
+    col_sku = "sku货号"
+    col_time = "订单创建时间"
 
-    # 计算合计
-    df['合计'] = df['数量'] * df['应履约件数']
+    # 检查必要字段是否存在
+    if col_qty not in df.columns or col_sku not in df.columns or col_time not in df.columns:
+        print(f"跳过文件：{file}（缺少必要列）")
+        continue
 
-    # 订单创建时间转为日期
-    df['订单创建时间'] = pd.to_datetime(df['订单创建时间'])
-    df['日期'] = df['订单创建时间'].dt.date
+    # 转换数据类型
+    df[col_qty] = pd.to_numeric(df[col_qty], errors="coerce").fillna(0).astype(int)
+    df[col_time] = pd.to_datetime(df[col_time], errors="coerce")
 
-    df_list.append(df)
+    for qty, sku_str, dt in zip(df[col_qty], df[col_sku], df[col_time]):
+        if pd.isna(dt) or qty <= 0:
+            continue
+        order_date = dt.date()
+        sku_counts = parse_sku(sku_str, qty)
+        for sku, total in sku_counts.items():
+            result_rows.append([order_date, shop, sku, total])
 
-# 合并所有数据
-df_all = pd.concat(df_list, ignore_index=True)
+# === 汇总 ===
+res_df = pd.DataFrame(result_rows, columns=["日期", "店铺", "SKU", "台数"])
 
-# 汇总
-summary = df_all.groupby(['日期', '店铺名', '型号'])['合计'].sum().reset_index()
-
-summary
-
-summary.to_excel("6.12_output.xlsx", index=False)
+if res_df.empty:
+    print("没有可汇总的数据。")
+else:
+    summary = (
+        res_df.groupby(["日期", "店铺", "SKU"], as_index=False)["台数"]
+              .sum()
+              .sort_values(["日期", "店铺", "SKU"])
+    )
+    summary.to_excel(output_file, index=False)
+    print(f"统计完成，结果已保存到：{output_file}")
