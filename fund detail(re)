@@ -1,73 +1,117 @@
 # TEMU 平台资金明细自动合并脚本（适用于 Jupyter Notebook）
-
 import pandas as pd
 import numpy as np
-from collections import defaultdict
 
-# 路径配置
+# ========= 路径配置 =========
+excel_path = "wecode intelligence fund.xlsx"          # ← 改成你的文件路径
+output_path = "wecode intelligence fund(in).xlsx"        # ← 改成你想导出的文件名
 
-excel_path = ""
-
-# 读取所有 sheet
+# ========= 读取所有 sheet =========
 all_sheets = pd.read_excel(excel_path, sheet_name=None)
 
-# 初始化结果表和各类型名称
+# 一个小工具：从候选列名里找第一个存在的列名
+def pick_col(df, candidates):
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+# ========= 初始化映射 =========
 sheet_map = {
     "交易收入": None,
-    "运费收入": None,
+    "运费收入": None,   # 逻辑名，后面会映射到真实列名（兼容新旧）
     "售后退款": None,
-    "运费退款": None,
+    "运费退款": None,   # 逻辑名，后面会映射到真实列名（兼容新旧）
 }
 
-# 定义关键字查找定位 sheet
+# ========= 按 sheet 名抓取 & 兼容列名 =========
 for sheet_name, df in all_sheets.items():
+    # 交易收入
     if "交易收入" in sheet_name:
-        sheet_map["交易收入"] = df[['订单编号', '交易收入']]
-    elif "运费收入" in sheet_name:
-        sheet_map["运费收入"] = df[['订单编号', '运费收入']]
-    elif "售后退款" in sheet_name:
-        sheet_map["售后退款"] = df[['订单编号', '售后退款金额']]
-    elif "运费退款" in sheet_name:
-        sheet_map["运费退款"] = df[['订单编号', '运费退款']]
+        col_order = pick_col(df, ["订单编号", "平台订单号", "Order No", "订单号"])
+        col_income = pick_col(df, ["交易收入"])
+        if col_order and col_income:
+            sheet_map["交易收入"] = df[[col_order, col_income]].rename(
+                columns={col_order: "订单编号", col_income: "交易收入"}
+            )
 
-# 全部表格的订单编号加序号，处理重复
+    # 运费收入（旧：运费收入，新：订单运费-基础运费收入）
+    elif ("运费收入" in sheet_name) or ("订单运费" in sheet_name and "收入" in sheet_name):
+        col_order = pick_col(df, ["订单编号", "平台订单号", "Order No", "订单号"])
+        col_ship_income = pick_col(df, ["运费收入", "订单运费-基础运费收入"])
+        if col_order and col_ship_income:
+            sheet_map["运费收入"] = df[[col_order, col_ship_income]].rename(
+                columns={col_order: "订单编号", col_ship_income: "运费收入"}
+            )
+
+    # 售后退款
+    elif "售后退款" in sheet_name:
+        col_order = pick_col(df, ["订单编号", "平台订单号", "Order No", "订单号"])
+        col_refund = pick_col(df, ["售后退款金额", "售后退款"])
+        if col_order and col_refund:
+            sheet_map["售后退款"] = df[[col_order, col_refund]].rename(
+                columns={col_order: "订单编号", col_refund: "售后退款金额"}
+            )
+
+    # 运费退款（旧：运费退款，新：订单运费-基础运费退款）
+    elif ("运费退款" in sheet_name) or ("订单运费" in sheet_name and "退款" in sheet_name):
+        col_order = pick_col(df, ["订单编号", "平台订单号", "Order No", "订单号"])
+        col_ship_refund = pick_col(df, ["运费退款", "订单运费-基础运费退款"])
+        if col_order and col_ship_refund:
+            sheet_map["运费退款"] = df[[col_order, col_ship_refund]].rename(
+                columns={col_order: "订单编号", col_ship_refund: "运费退款"}
+            )
+
+# ========= 订单编号加序号，处理重复 =========
 renamed = {}
 for key, df in sheet_map.items():
-    if df is not None:
+    if df is not None and not df.empty:
         df = df.copy()
-        df['订单编号'] = df['订单编号'].astype(str)
-        df['_seq'] = df.groupby('订单编号').cumcount() + 1
-        df['订单编号_序号'] = df['订单编号'] + '_' + df['_seq'].astype(str)
-        renamed[key] = df.drop(columns=['_seq'])
+        df["订单编号"] = df["订单编号"].astype(str)
+        df["_seq"] = df.groupby("订单编号").cumcount() + 1
+        df["订单编号_序号"] = df["订单编号"] + "_" + df["_seq"].astype(str)
+        renamed[key] = df.drop(columns=["_seq"])
 
-# 以交易收入为主表，如果不存在则创建空表
-main_df = renamed.get("交易收入", pd.DataFrame(columns=['订单编号', '交易收入', '订单编号_序号']))
+# ========= 以交易收入为主表 =========
+main_df = renamed.get("交易收入", pd.DataFrame(columns=["订单编号", "交易收入", "订单编号_序号"]))
 
-# 同步融合其他列
+# ========= 合并其他三类 =========
 for key in ["运费收入", "售后退款", "运费退款"]:
     df = renamed.get(key)
-    if df is not None:
-        main_df = pd.merge(main_df, df.drop(columns=['订单编号']), on='订单编号_序号', how='outer')
+    if df is not None and not df.empty:
+        main_df = pd.merge(
+            main_df, 
+            df.drop(columns=["订单编号"]), 
+            on="订单编号_序号", 
+            how="outer"
+        )
 
-# 算出平台回款
-main_df[['交易收入', '运费收入', '售后退款金额', '运费退款']] = main_df[[
-    '交易收入', '运费收入', '售后退款金额', '运费退款']].fillna(0)
-main_df['平台回款'] = main_df['交易收入'] + main_df['运费收入'] - main_df['售后退款金额'] - main_df['运费退款']
+# ========= 数值列清洗 & 平台回款 =========
+for col in ["交易收入", "运费收入", "售后退款金额", "运费退款"]:
+    if col not in main_df.columns:
+        main_df[col] = 0
+    main_df[col] = pd.to_numeric(main_df[col], errors="coerce").fillna(0)
 
-# 按需排列（可选）
-main_df = main_df.sort_values(by='订单编号')
+main_df["平台回款"] = main_df["交易收入"] + main_df["运费收入"] - main_df["售后退款金额"] - main_df["运费退款"]
 
+# ========= 回填原始订单编号并排序 =========
+if "订单编号" not in main_df.columns:
+    main_df["订单编号"] = np.nan
 
-# 若原始订单编号为空，根据“订单编号_序号”提取回原始订单编号
-main_df['订单编号'] = main_df.apply(
-    lambda row: row['订单编号'] if pd.notnull(row['订单编号']) else row['订单编号_序号'].rsplit('_', 1)[0],
+main_df["订单编号"] = main_df.apply(
+    lambda row: row["订单编号"] if pd.notnull(row["订单编号"]) and row["订单编号"] != "" 
+    else str(row["订单编号_序号"]).rsplit("_", 1)[0],
     axis=1
 )
 
+main_df = main_df.sort_values(by=["订单编号", "订单编号_序号"]).reset_index(drop=True)
 
-# 输出
-main_df.to_excel("", index=False)
-print("✅ 汇总完成，已导出为 Excel 文件。")
+# ========= 导出 =========
+main_df.to_excel(output_path, index=False)
+
+
+
+
 
 
 
@@ -76,46 +120,70 @@ print("✅ 汇总完成，已导出为 Excel 文件。")
 
 
 import pandas as pd
+import numpy as np
 import re
 
 # === 路径设置 ===
-回款路径 = ''
-资金表路径 = ''  # 替换为你的实际路径
-资金sheet名 = '结算-交易收入'
+回款路径 = r'wecode intelligence fund(in).xlsx'                 # ← 改成你的回款表路径
+资金表路径 = r'wecode intelligence fund.xlsx'             # ← 改成你的资金明细路径
+资金sheet名 = '结算-交易收入'              # ← 如有变化，改这里
+输出文件 = r'wecode intelligence fund汇总.xlsx'
 
 # === 读取数据 ===
 回款_df = pd.read_excel(回款路径)
 资金_df = pd.read_excel(资金表路径, sheet_name=资金sheet名)
 
-# === 提取 SKU 和 数量（履约件数 = pcs 前数字 × 最后一段数字）
-def extract_info(row):
-    try:
-        parts = str(row).split('_')
-        model = parts[1].split('*')[0]  # C31W
-        x = int(re.findall(r'\d+', parts[-2])[0])  # pcs 前的数量，如 4
-        y = int(parts[-1])  # 最后一段的数量，如 25
-        total_qty = x * y
-        return pd.Series([model, total_qty])
-    except:
-        return pd.Series([None, None])
+# === 找到“SKU明细”列（优先用你的原列名，其次模糊匹配） ===
+col_sku_detail = None
+if 'SKU明细(SkuID_SKU货号_SKU名称_SKU属性_销售数量)' in 资金_df.columns:
+    col_sku_detail = 'SKU明细(SkuID_SKU货号_SKU名称_SKU属性_销售数量)'
+else:
+    for c in 资金_df.columns:
+        if 'SKU明细' in c and ('销售数量' in c or '数量' in c):
+            col_sku_detail = c
+            break
+if col_sku_detail is None:
+    raise ValueError("未找到包含 'SKU明细' 和 '销售数量/数量' 的列，请检查资金表列名。")
 
-资金_df[['SKU', '数量']] = 资金_df['SKU明细(SkuID_SKU货号_SKU名称_SKU属性_销售数量)'].apply(extract_info)
+# === 提取 SKU 和 数量（规则：数量 = 星号后数字 × 最末尾数字；忽略中间“pcs/个/件”等） ===
+s = 资金_df[col_sku_detail].astype(str).str.strip()
 
-# === 字段标准化
+# SKU：第二段下划线字段，去掉 *后的数量
+# 例：23057696326_C31W*2_... -> C31W
+sku = s.str.extract(r'^[^_]+_([^_*]+)')[0]
+
+# 星号后的数字（若无星号，按 1 处理）
+m1 = s.str.extract(r'\*(\d+)')[0].fillna('1').astype(int)
+
+# 最末尾下划线后的数字（若无末尾数字，按 1 处理）
+m2 = s.str.extract(r'_(\d+)\s*$')[0].fillna('1').astype(int)
+
+资金_df['SKU'] = sku
+资金_df['数量'] = m1 * m2
+
+# === 字段标准化 ===
+if '订单编号' not in 资金_df.columns or '交易收入' not in 资金_df.columns:
+    missing = [c for c in ['订单编号', '交易收入'] if c not in 资金_df.columns]
+    raise ValueError(f"资金表缺少必要列：{missing}")
+
+if '订单编号' not in 回款_df.columns or '交易收入' not in 回款_df.columns:
+    missing = [c for c in ['订单编号', '交易收入'] if c not in 回款_df.columns]
+    raise ValueError(f"回款表缺少必要列：{missing}")
+
 资金_df['订单编号'] = 资金_df['订单编号'].astype(str)
 回款_df['订单编号'] = 回款_df['订单编号'].astype(str)
 
 资金_df['交易收入'] = pd.to_numeric(资金_df['交易收入'], errors='coerce').round(2)
 回款_df['交易收入'] = pd.to_numeric(回款_df['交易收入'], errors='coerce').round(2)
 
-# === 去重资金表，避免合并放大
+# === 去重资金表（按 订单编号+交易收入 去重，避免合并放大） ===
 资金_df_unique = (
     资金_df
     .drop_duplicates(subset=['订单编号', '交易收入'])
     [['订单编号', '交易收入', 'SKU', '数量']]
 )
 
-# === 合并
+# === 合并（左连接：以回款表为准） ===
 merged_df = pd.merge(
     回款_df,
     资金_df_unique,
@@ -123,17 +191,15 @@ merged_df = pd.merge(
     how='left'
 )
 
-# === 调整列顺序：将 SKU 和 数量 放在订单编号后面
+# === 调整列顺序：SKU 与 数量 放在 订单编号 后面 ===
 cols = list(merged_df.columns)
-if 'SKU' in cols and '数量' in cols and '订单编号' in cols:
+if {'SKU', '数量', '订单编号'}.issubset(cols):
     idx = cols.index('订单编号')
-    # 移除后插入
-    cols.remove('SKU')
-    cols.remove('数量')
-    cols.insert(idx + 1, 'SKU')
-    cols.insert(idx + 2, '数量')
+    # 先移除后再插入到“订单编号”后面
+    cols.remove('SKU'); cols.remove('数量')
+    cols[idx+1:idx+1] = ['SKU', '数量']
     merged_df = merged_df[cols]
 
-# === 导出结果
-merged_df.to_excel('回款与SKU匹配结果.xlsx', index=False)
-print("✅ 匹配完成，已保存为：回款与SKU匹配结果.xlsx")
+# === 导出结果 ===
+merged_df.to_excel(输出文件, index=False)
+print(f"✅ 匹配完成，已保存为：{输出文件}")
